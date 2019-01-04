@@ -37,14 +37,11 @@ const UNSUBSCRIPTION_SUCCESS_MESSAGE =
     "You've been unsubscribed from all Guardian marketing newsletters and emails.";
 const ERR_MALFORMED_HTML = 'Something went wrong';
 
-const updateConsent = (consent: SettableConsent): Promise<void> =>
-    setConsent([consent]);
-
 const buildConsentUpdatePayload = (
     fields: NodeList<any> = new NodeList()
 ): SettableConsent => {
     const consent = {};
-    [...fields].forEach((field: HTMLInputElement) => {
+    Array.from(fields).forEach((field: HTMLInputElement) => {
         switch (field.type) {
             case 'checkbox':
                 consent.consented = field.checked;
@@ -75,11 +72,13 @@ const unsubscribeFromAll = (buttonEl: HTMLButtonElement): Promise<void> => {
 
 const toggleInputsWithSelector = (className: string, checked: boolean) =>
     fastdom
-        .read(() => [
-            ...document.querySelectorAll(
-                `.${className} input[type="checkbox"]`
-            ),
-        ])
+        .read(() =>
+            Array.from(
+                document.querySelectorAll(
+                    `.${className} input[type="checkbox"]`
+                )
+            )
+        )
         .then(boxes =>
             boxes.forEach(b => {
                 b.checked = checked;
@@ -172,7 +171,7 @@ const bindNewsletterSwitch = (labelEl: HTMLElement): void => {
 const updateConsentSwitch = (labelEl: HTMLElement): Promise<void> =>
     Promise.all([getInputFields(labelEl), addSpinner(labelEl)])
         .then(([fields]) => buildConsentUpdatePayload(fields))
-        .then(consent => updateConsent(consent))
+        .then(consent => setConsent([consent]))
         .catch((err: Error) => {
             pushError(err, 'reload').then(() => {
                 window.scrollTo(0, 0);
@@ -221,11 +220,11 @@ const bindCheckAllSwitch = (labelEl: HTMLElement): void => {
                 fastdom.read(() => {
                     const nearestWrapperEl = labelEl.closest(selector);
                     if (!nearestWrapperEl) throw new Error(ERR_MALFORMED_HTML);
-                    return [
-                        ...nearestWrapperEl.querySelectorAll(
+                    return Array.from(
+                        nearestWrapperEl.querySelectorAll(
                             'input[type=checkbox]'
-                        ),
-                    ].filter(
+                        )
+                    ).filter(
                         $checkbox =>
                             $checkbox.closest(
                                 `.${checkAllCheckboxClassName}`
@@ -241,38 +240,53 @@ const bindCheckAllSwitch = (labelEl: HTMLElement): void => {
         fetchWrappedCheckboxes(),
         bindCheckboxAnalyticsEventsOnce(labelEl),
     ]).then(([[checkboxEl, titleEl], wrappedCheckboxEls]) => {
+        if (!(checkboxEl instanceof HTMLInputElement)) {
+            throw new Error(ERR_MALFORMED_HTML);
+        }
+
         const getTextForStatus = (status: boolean) =>
             status ? LC_UNCHECK_ALL : LC_CHECK_ALL;
 
         const updateCheckStatus = () =>
             fastdom.write(() => {
-                if (!(checkboxEl instanceof HTMLInputElement)) {
-                    throw new Error(ERR_MALFORMED_HTML);
-                }
                 checkboxEl.checked = getCheckedAllStatus(wrappedCheckboxEls);
                 titleEl.innerHTML = getTextForStatus(checkboxEl.checked);
                 labelEl.style.visibility = 'visible';
                 labelEl.style.pointerEvents = 'all';
             });
 
+        const getInputFieldsFromCheckboxes = checkboxesToUpdate =>
+            checkboxesToUpdate.map(checkboxElToUpdate => {
+                const checkboxLabelEl = checkboxElToUpdate.labels[0];
+                if (!(checkboxLabelEl instanceof HTMLLabelElement)) {
+                    throw new Error(ERR_MALFORMED_HTML);
+                }
+                return getInputFields(checkboxLabelEl);
+            });
+
         const handleChangeEvent = () => {
             addSpinner(labelEl, 9999)
                 .then(() => new Promise(accept => setTimeout(accept, 300)))
                 .then(() => removeSpinner(labelEl));
-            wrappedCheckboxEls.forEach(wrappedCheckboxEl => {
-                fastdom
-                    .write(() => {
-                        if (!(checkboxEl instanceof HTMLInputElement)) {
-                            throw new Error(ERR_MALFORMED_HTML);
-                        }
-                        wrappedCheckboxEl.checked = checkboxEl.checked;
-                    })
-                    .then(() => {
-                        wrappedCheckboxEl.dispatchEvent(
-                            new Event('change', { bubbles: true })
-                        );
-                    });
+
+            const checkboxesToUpdate = wrappedCheckboxEls.filter(
+                wrappedCheckboxEl =>
+                    wrappedCheckboxEl.checked !== checkboxEl.checked
+            );
+
+            checkboxesToUpdate.forEach(wrappedCheckboxEl => {
+                fastdom.write(() => {
+                    wrappedCheckboxEl.checked = checkboxEl.checked;
+                });
             });
+
+            Promise.all(getInputFieldsFromCheckboxes(checkboxesToUpdate))
+                .then(checkboxInputs =>
+                    checkboxInputs.map(buildConsentUpdatePayload)
+                )
+                .then(setConsent);
+
+            updateCheckStatus();
         };
 
         if (getCheckedAllStatus(wrappedCheckboxEls) === false) {
